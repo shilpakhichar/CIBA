@@ -1,0 +1,99 @@
+---
+title: "CIBA_PROJECT2_Final"
+author: "Shilpa Khichar"
+date: "9 January 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+clear tables from Global Environment
+
+```{r clear tables}
+rm(list=ls()) 
+```
+installing libraries
+```{r lib}
+library(NeuralNetTools)
+library(neuralnet)
+```
+
+Fetching dataset
+```{r online}
+Online_news_popularity <- read.csv(file.path("C:\\Users\\hp\\Documents\\OnlineNewsPopularity.csv"), header=TRUE, sep=",", encoding="UTF-8")
+#Dividing dataset into 5 classes 
+Online_news_popularity$class <- with( Online_news_popularity, ifelse(shares < 900 ,1 ,
+                                                              ifelse (shares > 900 & shares < 1200 ,2 ,
+                                                              ifelse (shares > 1200 & shares < 2000 ,3 ,
+                                                              ifelse(shares > 2000 & shares < 7000 ,4 ,5 )))
+                                                                          ))
+table(Online_news_popularity$class)
+
+Online_crop <- as.data.frame( subset(Online_news_popularity, select = c("n_tokens_content", "n_non_stop_unique_tokens", "LDA_02" , "LDA_04","class") ))
+
+table(Online_crop$class)
+# data partitioning for traing and testing datasets
+
+library(caret)
+set.seed(2017)
+indxTrainSet <- createDataPartition(y = Online_crop$class , p=0.01)
+indxTestSet <- createDataPartition(y = Online_crop$class , p=0.01)
+train <- Online_crop[indxTrainSet$Resample1, ]
+test <- Online_crop[indxTestSet$Resample1, ]
+nnet_train <- train
+table(test$class)
+
+# Binarize the categorical output
+nnet_train <- cbind(nnet_train, train$class == 1)
+nnet_train <- cbind(nnet_train, train$class == 2)
+nnet_train <- cbind(nnet_train, train$class == 3)
+nnet_train <- cbind(nnet_train, train$class == 4)
+nnet_train <- cbind(nnet_train, train$class == 5)
+
+names(nnet_train)[6] <- 'Class_1'
+names(nnet_train)[7] <- 'Class_2'
+names(nnet_train)[8] <- 'Class_3'
+names(nnet_train)[9] <- 'Class_4'
+names(nnet_train)[10] <- 'Class_5'
+
+head(nnet_train)
+```
+Backpropagation Neural Network Model 
+Hidden neurons for each of the 6 models ->5,7,10,12,15 
+Stepmax -> 300000(stoping criteria:maximum steps for the training of the neural network. )
+Learning rate = 0.01
+activation function ->logistic 
+
+```{r backprop}
+result_matrix = NULL
+hidden_neurons =c(5,7,10,12,15)
+for (hidden_neuron in c(hidden_neurons)){
+
+nn <- neuralnet(Class_1+Class_2+Class_3+Class_4+Class_5~n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04,
+                data=nnet_train, hidden=c(hidden_neuron),
+                stepmax = 3e+05,
+                learningrate=0.01,
+                algorithm = "backprop" ,
+                err.fct = "sse", 
+                act.fct = "logistic",
+                linear.output = FALSE)
+
+
+mypredict <- compute(nn, train[-5])$net.result
+# Put multiple binary output to categorical output
+maxidx <- function(arr) {
+    return(which(arr == max(arr)))
+}
+idx <- apply(mypredict, c(1), maxidx)
+prediction <- c('Class_1', 'Class_2', 'Class_3','Class_4','Class_5')[idx]
+cm <- table(prediction, nnet_train$class)
+cm
+accuracy = sum(diag(cm)) / sum(cm) 
+accuracy
+model <- "backprop"
+result_matrix= rbind(result_matrix, data.frame( model ,hidden_neuron, accuracy))
+}
+result_matrix
+```

@@ -1,0 +1,307 @@
+---
+title: "Untitled"
+author: "Shilpa Khichar"
+date: "15 December 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+clear tables from Global Environment
+```{r clear tables}
+rm(list=ls()) 
+```
+Reading data from CSV file to R dataset:
+Printing first 6 rows of the dataset choosen, for better understanding of attributes
+```{r reading data}
+getwd()
+#Online_news_popularity <- read.csv(file.path(getwd(),  "OnlineNewsPopularity.csv"), header=TRUE, sep=",", encoding="UTF-8")
+
+Online_news_popularity <- read.csv(file.path("C:\\Users\\hp\\Documents\\OnlineNewsPopularity.csv"), header=TRUE, sep=",", encoding="UTF-8")
+head(Online_news_popularity)
+```
+so next we modify our classification range ,for balanced enteries:
+```{r classifing}
+Online_news_popularity$class <- with( Online_news_popularity, ifelse(shares < 1500 ,1 ,2))
+```
+
+ next we check the frequencies of each label 
+```{r frequency check}
+table(Online_news_popularity$class)
+```
+ we want our data to be stable i.e. more or less same frequencies... if there is huge difference in frequencies then there are descripancies in the results, because the lable with more frequency draws most predictions towards itself.
+
+
+ Removing non-predictive variables :  "url", 
+                                      "timedelta", 
+                                       
+ Removing Near Zero Variance variable:"kw_min_max"  
+ Removing Highly coorelated variables:"kw_avg_avg" 
+                                      "data_channel_is_world"
+                                      "rate_negative_words" 
+                                      "LDA_00"                
+                                      "kw_min_min"                
+                                      "self_reference_max_shares"
+                                      "kw_max_min"                
+                                      "self_reference_min_shares"
+                                      "n_non_stop_words"         
+                                      "n_unique_tokens"
+
+ Using  random forest importance function yeilds the below model :
+             class                         (factor varaiable, basis of classification ;5 levels)
+             n_tokens_content              (Number of words in the content )
+             n_non_stop_unique_tokens      (Rate of unique non-stop words in the content )
+             data_channel_is_entertainment (Is data channel 'Entertainment'? )
+             data_channel_is_socmed        (Is data channel 'Social Media'?)
+             kw_min_avg                    (Avg. keyword (min. shares) )
+             kw_max_avg                    (Avg. keyword (max. shares) )
+             self_reference_avg_sharess    (Min. shares of referenced articles in Mashable )
+             is_weekend                    (Was the article published on the weekend? )
+             LDA_02                        (Closeness to LDA topic 2 )
+             LDA_04                        (Closeness to LDA topic 4 )
+```{r preprocessing}
+usefull <- names(Online_news_popularity) %in% 
+c("class", "n_tokens_content","n_non_stop_unique_tokens", "data_channel_is_entertainment","data_channel_is_socmed","kw_min_avg","kw_max_avg", "self_reference_avg_sharess", "is_weekend", "LDA_02","LDA_04","shares")
+online_usefull <- Online_news_popularity[usefull]
+```
+ now we convert class variable from numeric to factor variable 
+
+```{r checking structure}
+str(online_usefull)
+```
+ class variable is  normalized here
+```{r normalizing}
+library(caret)
+preProcValues <- preProcess(online_usefull, method = c("range"))
+
+set.seed(20)
+
+
+
+indxTrain <- createDataPartition(y = online_usefull$class, p = 0.02)
+Online_train <- predict(preProcValues, online_usefull[indxTrain$Resample1, ])
+indxTrain <- createDataPartition(y = online_usefull$class, p = 0.02)
+Online_test <- predict(preProcValues,online_usefull[indxTrain$Resample1, ])
+
+Online_test_crop <- as.data.frame( subset(Online_train, select = c("n_tokens_content", "n_non_stop_unique_tokens", "LDA_02" , "LDA_04","class","shares") ))
+
+```
+## neural network on online news popularity:
+```{r implementing nn}
+library(neuralnet)
+
+result_matrix = NULL
+```
+
+# backprop neural network model
+```{r nn_bp}
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = Online_train , hidden = 3, learningrate=0.01,algorithm = 'backprop' ,err.fct = "sse", stepmax = 2e05, linear.output = FALSE)
+plot(nn)
+nn.results <- compute(nn, Online_test_crop[, 1:4] )
+results <- data.frame(actual = Online_test_crop$class, prediction = nn.results$net.result)
+results[1:20,  ]
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+
+misClasificationError = mean(Online_test_crop != nn1)
+OutputVsPred = cbind(Online_train$class, nn1)
+
+
+cm <- table(Online_test_crop$class, nn1)
+
+confusionMatrix(cm)
+
+n = sum(cm) # number of instances
+nc = nrow(cm) # number of classes
+diag = diag(cm) # number of correctly classified instances per class 
+rowsums = apply(cm, 1, sum) # number of instances per class
+colsums = apply(cm, 2, sum) # number of predictions per class
+p = rowsums / n # distribution of instances over the actual classes
+q = colsums / n # distribution of instances over the predicted classes
+accuracy = sum(diag) / n 
+sensitivity = diag / rowsums 
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+expAccuracy = sum(p*q)
+kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+
+ result_matrix= rbind(result_matrix, data.frame( accuracy, precision, recall, f1, kappa))
+```
+#resilient backpropagation with  weight backtracking 
+```{r nn_resilient_bp_with_weight }
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = Online_train , hidden = 3, learningrate=0.01,algorithm = 'rprop+' ,err.fct = "sse",  linear.output = FALSE)
+plot(nn)
+nn.results <- compute(nn, Online_test_crop[, 1:4] )
+results <- data.frame(actual = Online_test_crop$class, prediction = nn.results$net.result)
+results[1:20,  ]
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+
+misClasificationError = mean(Online_test_crop != nn1)
+OutputVsPred = cbind(Online_train$class, nn1)
+
+
+cm <- table(Online_test_crop$class, nn1)
+
+confusionMatrix(cm)
+
+n = sum(cm) 
+nc = nrow(cm) 
+diag = diag(cm)  
+rowsums = apply(cm, 1, sum) 
+colsums = apply(cm, 2, sum) 
+p = rowsums / n 
+q = colsums / n 
+accuracy = sum(diag) / n 
+sensitivity = diag / rowsums 
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+expAccuracy = sum(p*q)
+kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+
+ result_matrix= rbind(result_matrix, data.frame( accuracy, precision, recall, f1, kappa))
+```
+#resilient backpropagation  without weight backtracking 
+```{r nn_resilient_bp_without_weight}
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = Online_train , hidden = 3, learningrate=0.01,algorithm = 'rprop-' ,err.fct = "sse",  linear.output = FALSE)
+plot(nn)
+nn.results <- compute(nn, Online_test_crop[, 1:4] )
+results <- data.frame(actual = Online_test_crop$class, prediction = nn.results$net.result)
+results[1:20,  ]
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+
+misClasificationError = mean(Online_test_crop != nn1)
+OutputVsPred = cbind(Online_train$class, nn1)
+
+
+cm <- table(Online_test_crop$class, nn1)
+
+confusionMatrix(cm)
+
+n = sum(cm) 
+nc = nrow(cm) 
+diag = diag(cm)  
+rowsums = apply(cm, 1, sum) 
+colsums = apply(cm, 2, sum) 
+p = rowsums / n 
+q = colsums / n 
+accuracy = sum(diag) / n 
+sensitivity = diag / rowsums 
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+expAccuracy = sum(p*q)
+kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+
+ result_matrix= rbind(result_matrix, data.frame( accuracy, precision, recall, f1, kappa))
+```
+
+```{r nn_sag}
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = Online_train , hidden = 3, learningrate=0.01,algorithm = 'sag' ,err.fct = "sse",  linear.output = FALSE)
+plot(nn)
+nn.results <- compute(nn, Online_test_crop[, 1:4] )
+results <- data.frame(actual = Online_test_crop$class, prediction = nn.results$net.result)
+results[1:20,  ]
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+
+misClasificationError = mean(Online_test_crop != nn1)
+OutputVsPred = cbind(Online_train$class, nn1)
+
+
+cm <- table(Online_test_crop$class, nn1)
+
+confusionMatrix(cm)
+
+n = sum(cm) 
+nc = nrow(cm) 
+diag = diag(cm)  
+rowsums = apply(cm, 1, sum) 
+colsums = apply(cm, 2, sum) 
+p = rowsums / n 
+q = colsums / n 
+accuracy = sum(diag) / n 
+sensitivity = diag / rowsums 
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+expAccuracy = sum(p*q)
+kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+
+ result_matrix= rbind(result_matrix, data.frame( accuracy, precision, recall, f1, kappa))
+```
+```{r nn_slr}
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = Online_train , hidden = 3, learningrate=0.01,algorithm = 'slr' ,err.fct = "sse",  linear.output = FALSE)
+plot(nn)
+nn.results <- compute(nn, Online_test_crop[, 1:4] )
+results <- data.frame(actual = Online_test_crop$class, prediction = nn.results$net.result)
+results[1:20,  ]
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+
+misClasificationError = mean(Online_test_crop != nn1)
+OutputVsPred = cbind(Online_train$class, nn1)
+
+
+cm <- table(Online_test_crop$class, nn1)
+
+confusionMatrix(cm)
+
+n = sum(cm) 
+nc = nrow(cm) 
+diag = diag(cm)  
+rowsums = apply(cm, 1, sum) 
+colsums = apply(cm, 2, sum) 
+p = rowsums / n 
+q = colsums / n 
+accuracy = sum(diag) / n 
+sensitivity = diag / rowsums 
+precision = diag / colsums 
+recall = diag / rowsums 
+f1 = 2 * precision * recall / (precision + recall) 
+expAccuracy = sum(p*q)
+kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+
+ result_matrix= rbind(result_matrix, data.frame( accuracy, precision, recall, f1, kappa))
+```
+```{r summary}
+colnames(result_matrix) <- c("Accuracy", "Precision", "Recall", "F1", "Kappa")
+rownames(result_matrix) <- c("backprop 0" , "backprop 1", "rprop+ 0","rprop+ 1 ","rprop- 0","rprop- 1","sag 0","sag 1","slr 0","slr 1")
+result_matrix
+```
+# Conclusion
+From the result matrix we can see that rsileint back propagation Neural network model performs best on our dataset.
+as RPROP is A Fast Adaptive Learning Algorithm.It overcome the inherent disadvantages of the pure gradient-descent technique of the original backpropagation procedure, RPROP performs an adaptation of the weight update-values according to the behaviour of the errorfunction.Hence performs better.
+```{r plots}
+gwplot(nn, selected.covariate="LDA_02")
+ 
+gwplot(nn, selected.covariate="LDA_04")
+ 
+gwplot(nn, selected.covariate="n_tokens_content")
+ 
+gwplot(nn, selected.covariate="n_non_stop_unique_tokens")
+```
+here we check backpropagation model to predict the maximum shared article from the dataset online_test
+```{r maxshare prediction}
+##online_test_crop has same rows as online_test, but with less number of columns.
+## order function is used to find the entery with maximum number of shares
+order_asc<-Online_test_crop[order(-Online_test_crop$share),]
+## implementing backprpagation neural network model
+nn = neuralnet(class ~ n_tokens_content +n_non_stop_unique_tokens+ LDA_02 +LDA_04, data = order_asc , hidden = 3, learningrate=0.01,algorithm = 'backprop' ,err.fct = "sse",  linear.output = FALSE)
+plot(nn)
+## compution prediction for just 1 entery i.e. highest shares entery
+nn.results <- compute(nn, order_asc[1, 1:4] )
+nn.results 
+order_asc[1,]
+## here we can see that the entry was correctly predicted, we can check the model again our entery by comparing values of rest of the column values
+results <- data.frame(actual = order_asc[1,]$class, prediction = nn.results$net.result[1,])
+results
+nn1 = ifelse(nn.results$net.result>0.5 , 1, 0)
+misClasificationError = mean(order_asc[1, 1:4] != nn1)
+OutputVsPred = cbind(order_asc[1,]$class, nn1)
+OutputVsPred
+confusion_Matrix <- table(order_asc[1,]$class, nn1)
+
+## performance measures connot be calculated because at least 2 factors are required and here we are just checking for class = 1 ..maximum shares.
+```
